@@ -546,6 +546,8 @@ void *TrainModelThread(void *id) {
   real *cvec = (real *)calloc(dim, sizeof(real));
   real *nvec = (real *)calloc(dim, sizeof(real));
   real *base = (real *)calloc(dim, sizeof(real));
+  real *avenvec = (real *)calloc(dim, sizeof(real));
+  real *avecvec = (real *)calloc(dim, sizeof(real));
   FILE *fi = fopen(train_file, "rb");
   fseek(fi, file_size / (long long)num_threads * (long long)id, SEEK_SET);
   while (1) {
@@ -598,33 +600,37 @@ void *TrainModelThread(void *id) {
     for (c = 0; c < dim; c++) base[c] = 0;
     for (c = 0; c < dim; c++) cvec[c] = 0;
     for (c = 0; c < dim; c++) nvec[c] = 0;
+	for (c = 0; c < dim; c++) avecvec[c] = 0;
+	for (c = 0; c < dim; c++) avenvec[c] = 0;
     next_random = next_random * (unsigned long long)25214903917 + 11;
     b = next_random % window;
-
 
     if (cbow) {  //train the cbow architecture
 	  for (c = 0; c < dim; c++) cvec[c] = 0;
 		// in -> hidden
       cw = 0;
       char_list_cnt = 0;
+	  long long char_ave_cn = 0;
+	  long long word_ave_cn = 0;
       for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
         index = c = sentence_position - window + a;
         if (c < 0) continue;
         if (c >= sentence_length) continue;
         last_word = sen[c];
         if (last_word == -1) continue;
-
+		word_ave_cn += vocab[last_word].cn;
         // get alpha for composition
 
         for (c = 0; c < dim; c++) neu1char[c] = 0;
         for (c = 0; c < dim; c++) {
             neu1char[c] = (1 - weight) * syn0[c + last_word * dim];
             nvec[c] = syn0[c + last_word * dim];
+			avenvec[c] += syn0[c + last_word*dim];
 			weight += weit[c] * nvec[c];
         }
 		//考虑词频部分
 		weight += wei[dim * 2] * vovab[last_word].cn;
-		int char_ave_cn = 0;
+
         if (cwe_type && vocab[last_word].character_size) {
           if (cwe_type == 3 || cwe_type == 4 || cwe_type == 5) {
             get_base(base, sen, sentence_length, index);
@@ -638,6 +644,7 @@ void *TrainModelThread(void *id) {
             for (d = 0; d < dim; d++){
               neu1char[d] += weight * charv[d + charv_id * dim] / vocab[last_word].character_size;
               cvec[d] += charv[d + charv_id * dim] / vocab[last_word].character_size;
+			  avecvec[d]+= charv[d + charv_id * dim] / vocab[last_word].character_size;
 			  weight += cvec[d] * weit[dim + d];
             }
             charv_id_list[char_list_cnt] = charv_id;
@@ -651,7 +658,14 @@ void *TrainModelThread(void *id) {
         cw++;
       }
       if (cw) {
-        for (c = 0; c < dim; c++) neu1[c] /= cw;
+		  for (c = 0; c < dim; c++)
+		  {
+			  neu1[c] /= cw;
+			  avenvec[c] /= cw;
+			  avecvec[c] /= cw;
+			  char_ave_cn /= cw;
+			  word_ave_cn /= cw;
+		  }
         if (hs) for (d = 0; d < vocab[word].codelen; d++) {
           f = 0;
           l2 = vocab[word].point[d] * dim;
@@ -708,19 +722,11 @@ void *TrainModelThread(void *id) {
 
 		//I am not sure whether it's right
 		for (c = 0; c < dim; c++)
-			weit[c] += delta_alpha / nvec[c];
+			weit[c] += delta_alpha / avenvec[c];
 		for (c = 0; c < dim; c++)
-			weit[c + dim] += delta_alpha / cvec_ave[c];
-		for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
-			c = sentence_position - window + a;
-			if (c < 0) continue;
-			if (c >= sentence_length) continue;
-			last_word = sen[c];
-			if (last_word == -1) continue;
-			for (c = 0; c < dim; c++) 
-				//to do:更新weit
-		}
-		weit[dim*2]+=delta_alpha/
+			weit[c + dim] += delta_alpha / avecvec[c];
+		weit[dim * 2] += delta_alpha / word_ave_cn;
+		weit[dim * 2 + 1] += delta_alpha / char_ave_cn;
 
       }
 
